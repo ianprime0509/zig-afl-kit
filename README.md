@@ -17,17 +17,22 @@ Create an object file step with your test code (more on that later) and pass it 
 
 ```zig
 // build.zig
-const afl = @import("zig-afl-kit");
+const afl = @import("zig_afl_kit");
 
 // Define a step for generating fuzzing tooling:
 const fuzz = b.step("fuzz", "Generate an instrumented executable for AFL++");
 
-// Define an oblect file that contains your test function:
-const afl_obj = b.addObject(.{
-    .name = "my_fuzz_obj",
+// Define an module that contains your test function:
+const afl_mod = b.createModule(.{
     .root_source_file = b.path("src/fuzz.zig"),
     .target = target,
     .optimize = .Debug,
+});
+
+// Define an object built from the module above:
+const afl_obj = b.addObject(.{
+    .name = "my_fuzz_obj",
+    .root_module = afl_mod,
 });
 
 // Required options:
@@ -35,7 +40,14 @@ afl_obj.root_module.stack_check = false; // not linking with compiler-rt
 afl_obj.root_module.link_libc = true; // afl runtime depends on libc
 
 // Generate an instrumented executable:
-const afl_fuzz = afl.addInstrumentedExe(b, target, optimize, afl_obj);
+const afl_fuzz = afl.addInstrumentedExe(
+    b,
+    target,
+    optimize,
+    b.option([]const []const u8, "llvm-config-path", "Path to find llvm-config executable"),
+    b.systemIntegrationOption("aflplusplus", .{}),
+    afl_obj,
+);
 
 // Install it
 fuzz.dependOn(&b.addInstallBinFile(afl_fuzz, "myfuzz-afl").step);
@@ -53,18 +65,6 @@ This library integrates with AFL++ using:
 See `afl.c` for more info.
 See `example.zig` for an example of how to structure your test code.
 
-
-
-### **------> IMPORTANT <------**
-
-**UPDATE: Once ziglang/zig#20725 is merged, you will be able to avoid the next step by doing `afl_obj.root_module.fuzz = true;`.**
-
-For better fuzzing performance you will want to modify `std.mem.backend_can_use_eql_bytes` to return false, otherwise AFL++ will not be able to observe char-by-char string comparisons and its fuzzing capabilities will be greatly reduced.
-
-This means modifying your copy of the Zig stdlib. If you have ZLS you can simply write `std.mem` anywhere in your code and goto definiton, otherwise you can invoke `zig env` and modify `$std_dir/mem.zig`.
-
-**Also don't forget to revert this change after you're done!**
-
 ## CLI arguments
 `addInstrumentedExe` will define a `afl-path` option to allow you to point at a directory where you built AFL++, like so:
 
@@ -76,20 +76,23 @@ Of course you can, just setup your object file step to be compiled from C/C++ fi
 Something along these lines:
 
 ```zig
-const afl_obj = b.addObject(.{
-    .name = "my_fuzz_obj",
+const afl_mod = b.createModule(.{
     //.root_source_file = b.path("src/fuzz.zig"),
     .target = target,
     .optimize = .Debug,
 });
-
-afl_obj.addCSourceFiles(.{
+afl_mod.addCSourceFiles(.{
     .files = &.{
         "foo.c",
         "bar.c",
     },
     // In case you need flags:
     //.flags = &.{"-Wextra", "-DFOO"},
+});
+
+const afl_obj = b.addObject(.{
+    .name = "my_fuzz_obj",
+    .root_module = afl_mod,
 });
 
 // Required options:
